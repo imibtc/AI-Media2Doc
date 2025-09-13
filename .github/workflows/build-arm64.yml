@@ -1,7 +1,7 @@
 name: Build ARM64
 
 on:
-  workflow_dispatch:        # 手动按钮
+  workflow_dispatch:
   push:
     branches: [ main ]
 
