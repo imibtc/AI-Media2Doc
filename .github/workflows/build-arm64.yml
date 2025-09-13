@@ -20,7 +20,6 @@ jobs:
       - uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
           platforms: linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/ai-media2doc:latest
+          tags: ghcr.io/${{ github.repository_owner }}/xianyu-auto-reply:latest
