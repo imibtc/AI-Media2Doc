@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
         'localhost',
         '127.0.0.1',
         '192.168.1.118',
-        'imibtc.yyboxdns.com'        // ← 你的远程域名
+        'imibtc.ddnsto.com'        // ← 你的远程域名
       ],
       headers: {
         'Cross-Origin-Opener-Policy': 'same-origin',
