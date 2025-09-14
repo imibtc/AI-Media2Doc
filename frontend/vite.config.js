@@ -7,19 +7,14 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [vue()],
     server: {
-      host: '0.0.0.0',              // 允许局域网
+      host: '0.0.0.0',
       port: 5173,
       allowedHosts: [
         'localhost',
         '127.0.0.1',
         '192.168.1.118',
-        'imibtc.ddnsto.com'        // ← 你的远程域名
+        'imibtc.ddnsto.com'
       ],
-      headers: {
-        'Cross-Origin-Opener-Policy': 'same-origin',
-        'Cross-Origin-Embedder-Policy': 'require-corp',
-        'Cross-Origin-Resource-Policy': 'same-origin'
-      },
       proxy: {
         '/api': {
           target: env.VITE_API_BASE_URL,
