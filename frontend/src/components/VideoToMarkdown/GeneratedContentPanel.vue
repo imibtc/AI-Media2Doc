@@ -2,16 +2,54 @@
     <div class="text-card full-height">
         <div class="section-header with-bar">
             <h2>{{ getContentTypeTitle() }}</h2>
+            <!-- 大纲弹出框与按钮 -->
+            <el-popover
+                v-model:visible="outlineVisible"
+                placement="bottom-start"
+                trigger="click"
+                :width="340"
+                popper-class="outline-popover"
+                :hide-on-click="false"
+            >
+                <template #reference>
+                    <el-button
+                        type="primary"
+                        :icon="List"
+                        circle
+                        size="small"
+                        class="outline-btn"
+                        title="大纲"
+                    />
+                </template>
+                <div class="outline-content" @click.stop>
+                    <div v-if="outlineLoading" class="outline-loading">
+                        <el-icon class="loading-icon"><Loading /></el-icon>
+                        <span class="loading-text">正在生成大纲…</span>
+                        <el-skeleton animated :rows="6" style="margin-top:8px;" />
+                    </div>
+                    <div v-else>
+                        <div v-if="outlineItems.length === 0" class="outline-empty">当前内容暂无标题</div>
+                        <ul v-else class="outline-list">
+                            <li
+                                v-for="item in outlineItems"
+                                :key="item.id"
+                                class="outline-item"
+                                :style="{ paddingLeft: (item.level - 1) * 16 + 'px' }"
+                                @click="scrollToHeading(item)"
+                                :title="item.text"
+                            >
+                                <span :class="'level-' + item.level">{{ item.text }}</span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </el-popover>
             <el-button type="primary" :icon="Download" circle size="small" title="下载内容" @click="downloadContent"
                 class="copy-btn" />
         </div>
         <div class="original-text-content markdown-content-area">
             <template v-if="isContentMindMap">
-                <div id="mindMapContainer" class="mind-map-container"></div>
-                <div class="mindmap-tip">
-                    点击下载思维导图, 导入到 <a href="https://wanglin2.github.io/mind-map/#/"
-                        target="_blank">https://wanglin2.github.io/mind-map/#/</a> 即可在线编辑
-                </div>
+                <MindMapViewer :content="content" />
             </template>
             <template v-else>
                 <div v-html="renderedContent" class="markdown-content" />
@@ -21,11 +59,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
-import { ElButton, ElMessage } from 'element-plus'
-import { Download } from '@element-plus/icons-vue'
+import { ref, computed, nextTick, watch } from 'vue'
+import { ElButton } from 'element-plus'
+import { Download, List, Loading } from '@element-plus/icons-vue'
 import MarkdownIt from 'markdown-it'
-import MindMap from 'simple-mind-map'
+import MindMapViewer from './MindMapViewer.vue'
 
 const props = defineProps({
     content: {
@@ -48,7 +86,37 @@ const md = new MarkdownIt({
 // 启用表格插件
 md.enable('table')
 
-const mindMapInstance = ref(null)
+// 生成标题锚点的简易 slugify（与 taskId 结合保证唯一）
+const slugify = (s) => {
+    return String(s || '')
+        .toLowerCase()
+        .trim()
+        .replace(/<[^>]*>/g, '') // 去除可能的 HTML
+        .replace(/[^a-z0-9\u4e00-\u9fa5\s-]/g, '') // 允许中文、空格、连字符
+        .replace(/\s+/g, '-')
+        .slice(0, 64)
+}
+
+// 在渲染阶段为所有标题添加 id，避免后续 DOM 读写带来的卡顿
+const originalHeadingOpen = md.renderer.rules.heading_open || function (tokens, idx, options, env, self) {
+    return self.renderToken(tokens, idx, options)
+}
+md.renderer.rules.heading_open = function (tokens, idx, options, env, self) {
+    const next = tokens[idx + 1]
+    let text = ''
+    if (next && next.type === 'inline') {
+        text = (next.content || '').trim()
+    }
+    const id = slugify(text) + '-' + String(env?.taskId ?? '')
+    // 设置/覆盖 id 属性
+    const existing = tokens[idx].attrIndex('id')
+    if (existing < 0) {
+        tokens[idx].attrPush(['id', id])
+    } else {
+        tokens[idx].attrs[existing][1] = id
+    }
+    return originalHeadingOpen(tokens, idx, options, env, self)
+}
 
 // 判断内容是否为JSON格式
 const isJsonString = (str) => {
@@ -72,51 +140,58 @@ const getContentTypeTitle = () => {
 
 // 渲染后的内容
 const renderedContent = computed(() => {
-    return md.render(props.content)
+    // 通过 env 传入 taskId，确保渲染时标题带唯一 id
+    return md.render(props.content, { taskId: props.taskId })
 })
 
-// 转换思维导图数据格式
-const convertToMindMapFormat = (jsonData) => {
-    try {
-        const data = typeof jsonData === 'object' ? jsonData : JSON.parse(jsonData)
-        return data.data && (data.data.text || data.data.title)
-            ? data
-            : { data: { text: data.text || data.title || "思维导图" }, children: data.children || [] }
-    } catch {
-        return { data: { text: "解析失败的思维导图" }, children: [] }
+// 大纲相关状态
+const outlineVisible = ref(false)
+const outlineLoading = ref(false)
+const outlineItems = ref([])
+let generateTimer = null
+
+// 生成大纲（首次点击时进行）
+const generateOutline = async () => {
+    outlineLoading.value = true
+    await nextTick()
+    // 让弹出层先渲染帧，避免首次打开卡顿
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    // 直接使用 markdown-it 的 token 列表解析标题，避免 DOM 查询开销
+    const tokens = md.parse(props.content, { taskId: props.taskId })
+    const items = []
+    for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i]
+        if (t.type === 'heading_open') {
+            const level = Number(t.tag.slice(1))
+            const inline = tokens[i + 1]
+            const text = inline && inline.type === 'inline' ? (inline.content || '').trim() : ''
+            const id = t.attrGet('id') || slugify(text) + '-' + String(props.taskId)
+            items.push({ id, level, text })
+        }
     }
+    outlineItems.value = items
+    outlineLoading.value = false
 }
 
-// 初始化思维导图
-const initMindMap = async () => {
-    try {
-        if (mindMapInstance.value) mindMapInstance.value.destroy()
-        await nextTick()
-        const container = document.getElementById('mindMapContainer')
-        if (!container) return
-        container.style.width = '100%'
-        container.style.height = '500px'
-        const mindMapData = convertToMindMapFormat(props.content)
-        mindMapInstance.value = new MindMap({
-            el: container,
-            data: mindMapData,
-            theme: 'primary',
-            layout: 'mindMap',
-            enableNodeDragging: false,
-            height: 500,
-            width: container.clientWidth,
-            keypress: false,
-            contextMenu: false,
-            fit: true,
-            scale: 0.8,
-            textAutoWrap: true,
-            nodeTextEdit: false
-        })
-        mindMapInstance.value.render()
-        setTimeout(() => mindMapInstance.value?.command?.executeCommand('fit'), 300)
-    } catch {
-        ElMessage.error('思维导图初始化失败')
+// 当弹出框打开时，进行防抖解析（每次点击都生成）
+watch(outlineVisible, (visible) => {
+    if (visible) {
+        if (generateTimer) clearTimeout(generateTimer)
+        generateTimer = setTimeout(() => {
+            if (outlineVisible.value) {
+                generateOutline()
+            }
+        }, 100)
     }
+})
+
+// 滚动到对应标题（容器内平滑滚动）
+const scrollToHeading = (item) => {
+    const container = document.querySelector('.original-text-content.markdown-content-area')
+    const target = document.getElementById(item.id)
+    if (!container || !target) return
+    const top = target.offsetTop
+    container.scrollTo({ top, behavior: 'smooth' })
 }
 
 // 下载内容
@@ -140,11 +215,6 @@ const downloadContent = () => {
     URL.revokeObjectURL(url)
     document.body.removeChild(a)
 }
-
-// 组件生命周期
-onMounted(() => isContentMindMap.value && initMindMap())
-onBeforeUnmount(() => mindMapInstance.value?.destroy())
-watch(() => props.content, () => isContentMindMap.value && initMindMap())
 </script>
 
 <style scoped>
@@ -200,6 +270,11 @@ watch(() => props.content, () => isContentMindMap.value && initMindMap())
 .copy-btn {
     margin-left: auto;
     box-shadow: none;
+}
+
+.outline-btn {
+    margin-left: auto;
+    margin-right: 8px;
 }
 
 .original-text-content.markdown-content-area {
@@ -350,4 +425,65 @@ watch(() => props.content, () => isContentMindMap.value && initMindMap())
 .markdown-content table tr:last-child td {
     border-bottom: 1px solid #e9ecef !important;
 }
+
+/* 大纲弹出框与列表样式 */
+.outline-popover {
+    padding: 8px 0;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.outline-content {
+    max-height: 300px;
+    overflow-y: auto;
+    background: #fff;
+}
+
+.outline-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px 6px 12px;
+    color: #555;
+}
+
+.loading-icon {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.outline-empty {
+    padding: 10px 12px;
+    color: #888;
+    font-size: 13px;
+}
+
+.outline-list {
+    list-style: none;
+    margin: 0;
+    padding: 4px 0;
+}
+
+.outline-item {
+    padding: 6px 12px;
+    cursor: pointer;
+    border-top: 1px solid #f2f3f5;
+    color: #333;
+}
+
+.outline-item:hover {
+    background: #f8f9fa;
+}
+
+.outline-item .level-1 { font-weight: 700; font-size: 14px; color: #222; }
+.outline-item .level-2 { font-weight: 600; font-size: 13px; color: #333; }
+.outline-item .level-3 { font-weight: 600; font-size: 12px; color: #444; }
+.outline-item .level-4 { font-weight: 500; font-size: 12px; color: #555; }
+.outline-item .level-5 { font-weight: 500; font-size: 12px; color: #666; }
+.outline-item .level-6 { font-weight: 500; font-size: 12px; color: #777; }
 </style>

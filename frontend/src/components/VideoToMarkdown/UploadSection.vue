@@ -1,7 +1,8 @@
 <script setup>
-import { ElUpload, ElIcon, ElMessage, ElRadioGroup, ElRadioButton, ElInput } from 'element-plus'
-import { UploadFilled, VideoCamera, Promotion, RefreshRight, Loading } from '@element-plus/icons-vue'
+import { ElUpload, ElIcon, ElMessage, ElRadioGroup, ElRadioButton, ElInput, ElInputNumber, ElCollapse, ElCollapseItem, ElTooltip } from 'element-plus'
+import { UploadFilled, VideoCamera, Promotion, RefreshRight, Loading, Setting } from '@element-plus/icons-vue'
 import { ref, watch } from 'vue'
+import RemarksInput from '../common/RemarksInput.vue'
 
 const props = defineProps({
   ffmpegLoading: {
@@ -30,10 +31,18 @@ const props = defineProps({
   remarks: {
     type: String,
     default: ''
+  },
+  timeout: {
+    type: Number,
+    default: 120
+  },
+  maxTokens: {
+    type: Number,
+    default: 8192
   }
 })
 
-const emit = defineEmits(['file-selected', 'update:style', 'update:remarks', 'start-process', 'reset'])
+const emit = defineEmits(['file-selected', 'update:style', 'update:remarks', 'update:timeout', 'update:maxTokens', 'start-process', 'reset'])
 
 const allowedTypes = [
   'video/mp4',
@@ -94,9 +103,23 @@ const handleReset = () => {
 }
 
 const localRemarks = ref(props.remarks || '')
+const localTimeout = ref(props.timeout)
+const localMaxTokens = ref(props.maxTokens)
+
 watch(() => props.remarks, v => { localRemarks.value = v })
+watch(() => props.timeout, v => { localTimeout.value = v })
+watch(() => props.maxTokens, v => { localMaxTokens.value = v })
+
 const handleRemarksChange = (val) => {
   emit('update:remarks', val)
+}
+
+const handleTimeoutChange = (val) => {
+  emit('update:timeout', val)
+}
+
+const handleMaxTokensChange = (val) => {
+  emit('update:maxTokens', val)
 }
 </script>
 
@@ -136,7 +159,10 @@ const handleRemarksChange = (val) => {
           </h3>
           <p class="upload-desc" v-if="!ffmpegLoading">
             支持拖放或点击上传视频或MP3文件<br>
-            <span class="upload-formats">支持格式：MP4、MOV、AVI、MKV、WebM、MP3，最大 100MB</span>
+            <span class="upload-formats">支持格式：MP4、MOV、AVI、MKV、WebM、MP3，当前设置最大值为 {{ getLocalMaxUploadSize() }}MB</span>
+            <el-tooltip content="可以在自定义设置中调整大小。" placement="top" effect="dark">
+              <span class="size-tip-hint">?</span>
+            </el-tooltip>
           </p>
         </div>
       </el-upload>
@@ -180,10 +206,9 @@ const handleRemarksChange = (val) => {
               </el-radio-button>
             </el-radio-group>
           </div>
-          <div class="remarks-wrapper">
-            <el-input v-model="localRemarks" type="textarea" placeholder="你可以添加备注在默认提示词的基础上实现更加个性化的输出" :rows="2"
-              :disabled="isProcessing" @input="handleRemarksChange" class="remarks-input" resize="none" />
-          </div>
+          <RemarksInput v-model="localRemarks" :timeout="localTimeout" :max-tokens="localMaxTokens"
+            :disabled="isProcessing" @update:modelValue="handleRemarksChange" @update:timeout="handleTimeoutChange"
+            @update:maxTokens="handleMaxTokensChange" placeholder="你可以添加备注在默认提示词的基础上实现更加个性化的输出, 例如: 输出更详细一些" />
         </div>
         <div class="file-action-row">
           <el-button class="start-process-btn" :disabled="!localStyle || isProcessing" @click="handleStart">
@@ -382,6 +407,22 @@ const handleRemarksChange = (val) => {
   color: #23272f;
   font-weight: 500;
   letter-spacing: 0.1px;
+}
+
+.size-tip-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #f3f4f6;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid #e5e7eb;
+  cursor: help;
 }
 
 .loading-state {
